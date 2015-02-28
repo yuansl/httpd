@@ -103,7 +103,7 @@ namespace happyhttp
 
 	void Connection::setcallbacks(ResponseBegin_CB begincb,
 				      ResponseData_CB datacb,
-				      ResponseComplete_CB completecb, void* userdata)
+				      ResponseComplete_CB completecb, void *userdata)
 	{
 		m_ResponseBeginCB = begincb;
 		m_ResponseDataCB = datacb;
@@ -164,7 +164,7 @@ namespace happyhttp
 		// check headers for content-length
 		// TODO: check for "Host" and "Accept-Encoding" too
 		// and avoid adding them ourselves in putrequest()
-		if(headers) {
+		if (headers) {
 			const char **h = headers;
 			while (*h) {
 				const char* name = *h++;
@@ -176,18 +176,18 @@ namespace happyhttp
 		}
 
 		putrequest(method, url);
-		if(body && !gotcontentlength)
+		if (body != NULL && !gotcontentlength)
 			putheader("Content-Length", bodysize);
-		if(headers) {
+		if (headers) {
 			const char **h = headers;
-			while(*h) {
+			while (*h) {
 				const char *name = *h++;
 				const char *value = *h++;
 				putheader(name, value);
 			}
 		}
 		endheaders();
-		if(body)
+		if (body)
 			send((const char *) body, bodysize);
 	}
 
@@ -195,13 +195,16 @@ namespace happyhttp
 	{
 		if(m_State != IDLE)
 			err_exit("Request already issued");
-
-		m_State = REQ_STARTED;
+		
 		char req[512];
+		
+		m_State = REQ_STARTED;
+		
 		sprintf(req, "%s %s HTTP/1.1", method, url);
 		m_Buffer.push_back(req);
-
-		putheader("Host", m_Host.c_str());	// required for HTTP1.1
+		
+		//required for HTTP1.1
+		putheader("Host", m_Host.c_str());	
 
 		// don't want any fancy encodings please
 		putheader("Accept-Encoding", "identity");
@@ -241,37 +244,37 @@ namespace happyhttp
 		send(msg.c_str(), msg.size());
 	}
 
-	void Connection::send(const char* buf, int numbytes)
+	void Connection::send(const char* buf, int buflen)
 	{
-		int n;
+		ssize_t nsent;
 		if(m_Sock < 0)
 			connect();
 
-		while(numbytes > 0) {
-			n = ::send(m_Sock, buf, numbytes, 0);
-			if(n == -1)
-				err_exit("send()");
-			numbytes -= n;
-			buf += n;
+		while (buflen > 0) {
+			nsent = ::send(m_Sock, buf, buflen, 0);
+			if(nsent == -1)
+				err_exit("send error: %s\n", strerror(errno));
+			buflen -= nsent;
+			buf += nsent;
 		}
 	}
 
 	void Connection::pump()
 	{
-		if(m_Outstanding.empty())
+		if (m_Outstanding.empty())
 			return;		// no requests outstanding
 
 		Response *r;
 		assert(m_Sock > 0);	// outstanding requests but no connection!
 
-		if(!datawaiting(m_Sock))
+		if (!datawaiting(m_Sock))
 			return;				// recv will block
 
 		unsigned char buf[2048];
 		ssize_t n = recv(m_Sock, buf, sizeof(buf), 0);
 
 		if (n < 0)
-			err_exit("recv()");
+			err_exit("recv error: %s\n", strerror(errno));
 
 		if (n == 0) {
 			// connection has closed
@@ -285,12 +288,12 @@ namespace happyhttp
 			close();
 		} else {
 			int used = 0;
-			while(used < n && !m_Outstanding.empty()) {
+			while (used < n && !m_Outstanding.empty()) {
 				r = m_Outstanding.front();
 				int u = r->pump(buf + used, n - used);
 
 				// delete response once completed
-				if(r->completed()) {
+				if (r->completed()) {
 					delete r;
 					m_Outstanding.pop_front();
 				}
@@ -367,21 +370,21 @@ namespace happyhttp
 
 	void Response::process_whole_line()
 	{
-		switch(m_State) {
+		switch (m_State) {
 		case STATUSLINE:
-			ProcessStatusLine(m_LineBuf);
+			ProcessStatusLine();
 			break;
 		case HEADERS:
-			ProcessHeaderLine(m_LineBuf);
+			ProcessHeaderLine();
 			break;
 		case TRAILERS:
-			ProcessTrailerLine(m_LineBuf);
+			ProcessTrailerLine();
 			break;
 		case CHUNKLEN:
-			ProcessChunkLenLine(m_LineBuf);
+			ProcessChunkLenLine();
 			break;
 		case CHUNKEND:
-			// just soak up the crlf after body and go to next state
+			// just soak up the CRLF after body and go to next state
 			assert(m_Chunked);
 			m_State = CHUNKLEN;
 			break;
@@ -426,12 +429,12 @@ namespace happyhttp
 		return datasize - count;
 	}
 
-	void Response::ProcessChunkLenLine(std::string const& line)
+	void Response::ProcessChunkLenLine()
 	{
 		// chunklen in hex at beginning of line
-		m_ChunkLeft = strtol(line.c_str(), NULL, 16);
+		m_ChunkLeft = strtol(m_LineBuf.c_str(), NULL, 16);
 	
-		if(m_ChunkLeft == 0) {
+		if (m_ChunkLeft == 0) {
 			// got the whole body, now check for trailing headers
 			m_State = TRAILERS;
 			m_HeaderAccum.clear();
@@ -447,11 +450,11 @@ namespace happyhttp
 		assert(m_Chunked);
 
 		int n = count;
-		if(n>m_ChunkLeft)
+		if (n > m_ChunkLeft)
 			n = m_ChunkLeft;
 
 		// invoke callback to pass out the data
-		if(m_Connection.m_ResponseDataCB)
+		if (m_Connection.m_ResponseDataCB)
 			(m_Connection.m_ResponseDataCB)(this, m_Connection.m_UserData, data, n );
 
 		m_BytesRead += n;
@@ -469,10 +472,10 @@ namespace happyhttp
 	int Response::ProcessDataNonChunked(const unsigned char* data, int count)
 	{
 		int n = count;
-		if(m_Length != -1) {
+		if (m_Length != -1) {
 			// we know how many bytes to expect
 			int remaining = m_Length - m_BytesRead;
-			if( n > remaining )
+			if (n > remaining)
 				n = remaining;
 		}
 
@@ -489,19 +492,18 @@ namespace happyhttp
 		return n;
 	}
 
-
 	void Response::Finish()
 	{
 		m_State = COMPLETE;
-		// invoke the callback
-		if(m_Connection.m_ResponseCompleteCB)
+
+		if (m_Connection.m_ResponseCompleteCB)
 			(m_Connection.m_ResponseCompleteCB) (this,
 							     m_Connection.m_UserData);
 	}
 
-	void Response::ProcessStatusLine(std::string const& line)
+	void Response::ProcessStatusLine()
 	{
-		const char* p = line.c_str();
+		const char* p = m_LineBuf.c_str();
 
 		// skip any leading space
 		while(*p && isspace(*p))
@@ -518,19 +520,17 @@ namespace happyhttp
 		while (*p && isspace(*++p))
 			;
 		// rest of line is reason
-		while(*p)
+		while (*p)
 			m_Reason += *p++;
 
 		m_Status = atoi(status.c_str());
-		if(m_Status < 100 || m_Status > 999)
-			err_exit("BadStatusLine (%s)", line.c_str());
-		
-		while(*p && isspace(*p))
-			++p;
 
-		if(m_VersionString.compare(0, 8, "HTTP/1.0") == 0)
+		if(m_Status < 100 || m_Status > 999) /* really happend ?*/
+			err_exit("BadStatusLine (%s)", m_LineBuf.c_str()); 
+
+		if (!m_VersionString.compare(0, 8, "HTTP/1.0"))
 			m_Version = 10;
-		else if( 0==m_VersionString.compare(0, 8, "HTTP/1.1") )
+		else if(!m_VersionString.compare(0, 8, "HTTP/1.1"))
 			m_Version = 11;
 		else
 			err_exit("UnknownProtocol (%s)", m_VersionString.c_str());
@@ -548,8 +548,7 @@ namespace happyhttp
 
 		const char* p = m_HeaderAccum.c_str();
 
-		std::string header;
-		std::string value;
+		std::string header, value;
 		while(*p && *p != ':')
 			header += tolower(*p++);
 
@@ -564,10 +563,10 @@ namespace happyhttp
 		m_HeaderAccum.clear();
 	}
 
-	void Response::ProcessHeaderLine(string const& line)
+	void Response::ProcessHeaderLine()
 	{
-		const char* p = line.c_str();
-		if (line.empty()) {
+		const char* p = m_LineBuf.c_str();
+		if (m_LineBuf.empty()) {
 			FlushHeader();
 			// end of headers
 
@@ -593,12 +592,11 @@ namespace happyhttp
 		}
 	}
 
-
-	void Response::ProcessTrailerLine(const std::string &line)
+	void Response::ProcessTrailerLine()
 	{
 		// TODO: handle trailers?
 		// (python httplib doesn't seem to!)
-		if(line.empty())
+		if (m_LineBuf.empty())
 			Finish();
 		// just ignore all the trailers...
 	}
@@ -609,7 +607,7 @@ namespace happyhttp
 	void Response::BeginBody()
 	{
 		m_Chunked = false;
-		m_Length = -1;	// unknown
+		m_Length = -1;	                // unknown
 		m_WillClose = false;
 
 		// using chunked encoding?
@@ -655,8 +653,8 @@ namespace happyhttp
 		if(m_Version == 11) {
 			// HTTP/1.1
 			// the connection stays open unless "connection: close" is specified.
-			const char* conn = getheader("connection");
-			if(conn && !strcasecmp(conn, "close"))
+			const char* connection_hdr = getheader("connection");
+			if (connection_hdr && !strcasecmp(connection_hdr, "close"))
 				return true;
 			else
 				return false;
@@ -664,7 +662,7 @@ namespace happyhttp
 
 		// Older HTTP
 		// keep-alive header indicates persistant connection 
-		if(getheader("keep-alive"))
+		if (getheader("keep-alive"))
 			return false;
 
 		// TODO: some special case handling for Akamai and netscape maybe?
@@ -718,7 +716,6 @@ void Test2()
 	};
 
 	const char* body = "answer=42&name=Bubba";
-	
 	happyhttp::Connection conn("www.scumways.com", 80);
 	conn.setcallbacks(OnBegin, OnData, OnComplete, 0);
 	conn.request("POST", "/happyhttp/test.php", headers,
@@ -734,20 +731,20 @@ void Test3()
 	// POST example using lower-level interface
 
 	const char* params = "answer=42&foo=bar";
-	int l = strlen(params);
+	int len = strlen(params);
 
 	happyhttp::Connection conn("www.scumways.com", 80);
 	conn.setcallbacks(OnBegin, OnData, OnComplete, 0);
 
 	conn.putrequest("POST", "/happyhttp/test.php");
 	conn.putheader("Connection", "close");
-	conn.putheader("Content-Length", l);
+	conn.putheader("Content-Length", len);
 	conn.putheader("Content-type", "application/x-www-form-urlencoded" );
 	conn.putheader("Accept", "text/plain");
 	conn.endheaders();
-	conn.send(params, l );
+	conn.send(params, len);
 
-	while( conn.outstanding() )
+	while (conn.outstanding())
 		conn.pump();
 }
 
@@ -756,6 +753,6 @@ int main(int argc, char *argv[])
 	if (argc != 2)
 		happyhttp::err_exit("Usage: a.out <host>\n");
 	Test1(argv[1]);
-
+	Test3();
 	return 0;
 }

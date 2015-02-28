@@ -259,6 +259,7 @@ namespace happyhttp
 		void notifyconnectionclosed();
 
 	private:
+		Connection& m_Connection; // to access callback ptrs
 		enum state {
 			STATUSLINE,// start here. status line is first line of response.
 			HEADERS,   // reading in header lines
@@ -269,7 +270,6 @@ namespace happyhttp
 			COMPLETE,  // response is complete!
 		} m_State;
 
-		Connection& m_Connection;	// to access callback ptrs
 		std::string m_Method;		// req method: "GET", "POST" etc...
 
 		// status line
@@ -293,11 +293,12 @@ namespace happyhttp
 
 		void FlushHeader();
 		void process_whole_line();
-		void ProcessStatusLine(std::string const& line);
-		void ProcessHeaderLine(std::string const& line);
-		void ProcessTrailerLine(std::string const& line);
-		void ProcessChunkLenLine(std::string const& line);
+		void ProcessStatusLine();
+		void ProcessHeaderLine();
+		void ProcessTrailerLine();
+		void ProcessChunkLenLine();
 
+		
 		int ProcessDataChunked(const unsigned char* data, int count);
 		int ProcessDataNonChunked(const unsigned char* data, int count);
 
