@@ -32,18 +32,9 @@
 #include <vector>
 #include <deque>
 
-// forward decl
-struct in_addr;
-
 namespace happyhttp
 {
-	class Response;
-
-// Helper Functions
-	void BailOnSocketError(const char* context );
-	
-//	struct in_addr *atoaddr(const char* address);
-
+	struct Response;
 	typedef void (*ResponseBegin_CB) (const Response* r, void* userdata);
 	typedef void (*ResponseData_CB) (const Response* r, void* userdata,
 					 const unsigned char* data, int numbytes);
@@ -111,108 +102,83 @@ namespace happyhttp
 		NOT_EXTENDED = 510,
 	};
 
-// Exception class
-
-	class Wobbly {
-	public:
-		Wobbly(const char* fmt, ...);
-		
-		const char* what() const
-		{ return m_Message; }
-	protected:
-		enum { MAXLEN=256 };
-		char m_Message[MAXLEN];
-	};
-
 //-------------------------------------------------
 // Connection
 //
 // Handles the socket connection, issuing of requests and managing
 // responses.
 // ------------------------------------------------
-
-	class Connection {
-		friend class Response;
-	public:
-		// doesn't connect immediately
-		Connection(const char* host, int port);
-		~Connection();
-
-		// Set up the response handling callbacks. These will be invoked during
-		// calls to pump().
-		// begincb - called when the responses headers have been received
-		// datacb - called repeatedly to handle body data
-		// completecb - response is completed
-		// userdata is passed as a param to all callbacks.
-		void setcallbacks(ResponseBegin_CB begincb, ResponseData_CB datacb,
-				  ResponseComplete_CB completecb, void* userdata);
-
-		// Don't need to call connect() explicitly as issuing a request will
-		// call it automatically if needed.
-		// But it could block (for name lookup etc), so you might prefer to
-		// call it in advance.
-		void connect();
-
-		// close connection, discarding any pending requests.
-		void close();
-
-		// Update the connection (non-blocking)
-		// Just keep calling this regularly to service outstanding requests.
-		void pump();
-
-		// any requests still outstanding?
-		bool outstanding() const
-		{ return !m_Outstanding.empty(); }
-
-		// ---------------------------
-		// high-level request interface
-		// ---------------------------
+	struct Connection;
+	// Set up the response handling callbacks. These will be invoked during
+	// calls to pump().
+	// begincb - called when the responses headers have been received
+	// datacb - called repeatedly to handle body data
+	// completecb - response is completed
+	// userdata is passed as a param to all callbacks.
+	void setcallbacks(Connection *conn,
+			  ResponseBegin_CB begincb, ResponseData_CB datacb,
+			  ResponseComplete_CB completecb, void* userdata);
+	// ---------------------------
+	// high-level request interface
+	// ---------------------------
+	// method is "GET", "POST" etc...
+	// url is only path part: eg  "/index.html"
+	// headers is array of name/value pairs, terminated by a null-ptr
+	// body & bodysize specify body data of request (eg values for a form)
+	void request(Connection *conn, const char* method, const char* url,
+		     const char* headers[]=0,
+		     const unsigned char* body=0, int bodysize=0);
 	
-		// method is "GET", "POST" etc...
-		// url is only path part: eg  "/index.html"
-		// headers is array of name/value pairs, terminated by a null-ptr
-		// body & bodysize specify body data of request (eg values for a form)
-		void request(const char* method, const char* url,
-			     const char* headers[]=0,
-			     const unsigned char* body=0, int bodysize=0);
+	// ---------------------------
+	// low-level request interface
+	// ---------------------------
+	// begin request
+	// method is "GET", "POST" etc...
+	// url is only path part: eg  "/index.html"
+	void putrequest(Connection *conn, const char* method, const char* url);
 
-		// ---------------------------
-		// low-level request interface
-		// ---------------------------
+	// Update the connection (non-blocking)
+	// Just keep calling this regularly to service outstanding requests.
+	void pump(Connection *conn);
+	
+	// send body data if any.
+	// To be called after endheaders()
+	void send(Connection *conn, const char* buf, int numbytes);
+	
+	// Finished adding headers, issue the request.
+	void endheaders(Connection *conn);
 
-		// begin request
-		// method is "GET", "POST" etc...
-		// url is only path part: eg  "/index.html"
-		void putrequest(const char* method, const char* url);
+	// close connection, discarding any pending requests.
+	void close(Connection *conn);
 
-		// Add a header to the request (call after putrequest())
-		void putheader(const char* header, const char* value);
-		// alternate version
-		void putheader(const char* header, int numericvalue);	
+	// Don't need to call connect() explicitly as issuing a request will
+	// call it automatically if needed.
+	// But it could block (for name lookup etc), so you might prefer to
+	// call it in advance.
+	void tcp_connect(Connection *conn);
 
-		// Finished adding headers, issue the request.
-		void endheaders();
-
-		// send body data if any.
-		// To be called after endheaders()
-		void send(const char* buf, int numbytes);
-
-	protected:
+	// Add a header to the request (call after putrequest())
+	void putheader(Connection *conn, const char* header, const char* value);
+		
+	// alternate version
+	void putheader(Connection *conn, const char* header, int numericvalue);
+	
+	enum state { IDLE, REQ_STARTED, REQ_SENT };
+	
+	struct Connection {
+		// doesn't connect immediately
 		// some bits of implementation exposed to Response class
 
 		// callbacks
-		ResponseBegin_CB	m_ResponseBeginCB;
-		ResponseData_CB		m_ResponseDataCB;
-		ResponseComplete_CB	m_ResponseCompleteCB;
-		void			*m_UserData;
-
-	private:
-		enum { IDLE, REQ_STARTED, REQ_SENT } m_State;
+		ResponseBegin_CB m_ResponseBeginCB;
+		ResponseData_CB	m_ResponseDataCB;
+		ResponseComplete_CB m_ResponseCompleteCB;
+		void *m_UserData;
+		enum state m_State;
 		std::string m_Host;
 		int m_Port;
 		int m_Sock;
 		std::vector<std::string> m_Buffer;	// lines of request
-
 		std::deque<Response*> m_Outstanding;	// responses for outstanding requests
 	};
 
@@ -221,54 +187,55 @@ namespace happyhttp
 //
 // Handles parsing of response data.
 // ------------------------------------------------
+		
+	struct Response;
+	enum response_state {
+		STATUSLINE,// start here. status line is first line of response.
+		HEADERS,   // reading in header lines
+		BODY,	   // waiting for some body data (all or a chunk)
+		CHUNKLEN,  // expecting a chunk length indicator (in hex)
+		CHUNKEND,  // got the chunk, now expecting a trailing blank line
+		TRAILERS,  // reading trailers after body.
+		COMPLETE,  // response is complete!
+	};
 
-	class Response {
-		friend class Connection;
-	public:
-		// retrieve a header (returns 0 if not present)
-		const char* getheader(const char* name) const;
+	void FlushHeader(Response *resp);
+	void process_whole_line(Response *resp);
+	void ProcessStatusLine(Response *resp);
+	void ProcessHeaderLine(Response *resp);
+	void ProcessTrailerLine(Response *resp);
+	void ProcessChunkLenLine(Response *resp);
 
-		bool completed() const
-		{ return m_State == COMPLETE; }
+	int ProcessDataChunked(Response *resp, const unsigned char* data, int count);
+	int ProcessDataNonChunked(Response *resp, const unsigned char* data, int count);
 
-		const std::string& get_http_version() const {
-			return m_VersionString;
-		}
+	void BeginBody(Response *resp);
+	bool CheckClose(Response *resp);
+	void Finish(Response *resp);
+	// retrieve a header (returns 0 if not present)
+	const char* getheader(const Response *resp, const char* name);
 
-		// get the HTTP status code
-		int getstatus() const;
+	// get the HTTP status code
+	int getstatus(const Response *resp);
 
-		// get the HTTP response reason string
-		const char* getreason() const;
+	// get the HTTP response reason string
+	const char* getreason(const Response *resp);
 
-		// true if connection is expected to close after this response.
-		bool willclose() const
-		{ return m_WillClose; }
-	protected:
+	// pump some data in for processing.
+	// Returns the number of bytes used.
+	// Will always return 0 when response is complete.
+	int pump(Response *resp, const unsigned char* data, int datasize);
+
+	// tell response that connection has closed
+	void notifyconnectionclosed(Response *resp);
+	bool completed(Response *resp);
+	void response_init(Response *resp, const char *method, Connection *conn);
+	
+	struct Response {
 		// interface used by Connection
-
 		// only Connection creates Responses.
-		Response(const char* method, Connection& conn);
 
-		// pump some data in for processing.
-		// Returns the number of bytes used.
-		// Will always return 0 when response is complete.
-		int pump(const unsigned char* data, int datasize);
-
-		// tell response that connection has closed
-		void notifyconnectionclosed();
-
-	private:
-		Connection& m_Connection; // to access callback ptrs
-		enum state {
-			STATUSLINE,// start here. status line is first line of response.
-			HEADERS,   // reading in header lines
-			BODY,	   // waiting for some body data (all or a chunk)
-			CHUNKLEN,  // expecting a chunk length indicator (in hex)
-			CHUNKEND,  // got the chunk, now expecting a trailing blank line
-			TRAILERS,  // reading trailers after body.
-			COMPLETE,  // response is complete!
-		} m_State;
+		Connection *m_Connection; // to access callback ptrs
 
 		std::string m_Method;		// req method: "GET", "POST" etc...
 
@@ -278,7 +245,7 @@ namespace happyhttp
 		                                // 11: HTTP/1.x (where x>=1)
 		int m_Status;			// Status-Code
 		std::string m_Reason;	        // Reason-Phrase
-
+		enum response_state m_State;
 		// header/value pairs
 		std::map<std::string, std::string> m_Headers;
 
@@ -290,21 +257,6 @@ namespace happyhttp
 
 		std::string m_LineBuf;	// line accumulation for states that want it
 		std::string m_HeaderAccum; // accumulation buffer for headers
-
-		void FlushHeader();
-		void process_whole_line();
-		void ProcessStatusLine();
-		void ProcessHeaderLine();
-		void ProcessTrailerLine();
-		void ProcessChunkLenLine();
-
-		
-		int ProcessDataChunked(const unsigned char* data, int count);
-		int ProcessDataNonChunked(const unsigned char* data, int count);
-
-		void BeginBody();
-		bool CheckClose();
-		void Finish();
 	};
 }	// end namespace happyhttp
 
